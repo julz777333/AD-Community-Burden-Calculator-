@@ -6,21 +6,24 @@ import plotly.express as px
 st.set_page_config(page_title="AD Burden Calculator", layout="wide")
 st.title("ZIP-Code-Based Atopic Dermatitis Burden Calculator")
 
+# Sidebar for API tokens
 st.sidebar.header("API Tokens")
 airnow_token = st.sidebar.text_input("AirNow Token", value="1A09DCE5-A427-4805-AAA0-97ECB2053DFE")
 census_token = st.sidebar.text_input("Census Bureau Token", value="d25ceb4e63ceefbfeed820259ce82b76d0d403c5")
 hrsa_token = st.sidebar.text_input("HRSA Token", value="3054f3d7-8c8b-4164-986d-877cf1e3dcc6")
-cdc_places_url = "https://data.cdc.gov/api/v3/views/cwsq-ngmh/query.json"
 
+# Input ZIP codes
 zip_input = st.text_input("Enter ZIP codes separated by commas", value="10001,90210,30301")
 zip_codes = [z.strip() for z in zip_input.split(",") if z.strip().isdigit()]
 
 def normalize(value, min_val, max_val):
+    if max_val == min_val:
+        return 50
     return max(0, min(100, ((value - min_val) / (max_val - min_val)) * 100))
 
 def get_census_data(zip_code, token):
     try:
-        url = f"https://api.census.gov/data/2021/acs/acs5/profile?get=DP03_0119PE,DP05_0033PE,DP05_0071PE,DP05_0076PE,DP05_0081PE&for=zip%20code%20tabulation%20area:{zip_code}&key={token}"
+        url = f"https://api.census.gov/data/2021/acs/acs5/profile?get=DP03_0119PE,DP05_0033PE,DP05_0071PE,DP05_0076PE,DP05_0081PE,DP05_0078PE,DP05_0077PE&for=zip%20code%20tabulation%20area:{zip_code}&key={token}"
         response = requests.get(url)
         data = response.json()
         headers = data[0]
@@ -31,7 +34,9 @@ def get_census_data(zip_code, token):
             "urban_density": float(result.get("DP05_0033PE", 0)),
             "african_american_pct": float(result.get("DP05_0071PE", 0)),
             "hispanic_pct": float(result.get("DP05_0076PE", 0)),
-            "asian_pct": float(result.get("DP05_0081PE", 0))
+            "asian_pct": float(result.get("DP05_0081PE", 0)),
+            "native_american_pct": float(result.get("DP05_0078PE", 0)),
+            "white_pct": float(result.get("DP05_0077PE", 0))
         }
     except:
         return {
@@ -39,7 +44,9 @@ def get_census_data(zip_code, token):
             "urban_density": 0,
             "african_american_pct": 0,
             "hispanic_pct": 0,
-            "asian_pct": 0
+            "asian_pct": 0,
+            "native_american_pct": 0,
+            "white_pct": 0
         }
 
 def get_air_quality(zip_code, token):
@@ -67,6 +74,16 @@ def get_disease_prevalence(zip_code):
     prevalence = random.uniform(5, 20)
     return normalize(prevalence, 0, 25)
 
+def calculate_ethnicity_score(data):
+    score = (
+        data["african_american_pct"] * 8.5 +
+        data["white_pct"] * 7.7 +
+        data["asian_pct"] * 6.5 +
+        data["native_american_pct"] * 4.9 +
+        data["hispanic_pct"] * 4.8
+    )
+    return score
+
 def calculate_burden_score(data):
     score = (
         data["urban_density"] * 0.15 +
@@ -79,16 +96,29 @@ def calculate_burden_score(data):
     return round(score, 2)
 
 results = []
+ethnicity_raw_scores = []
+
 for zip_code in zip_codes:
     census_data = get_census_data(zip_code, census_token)
     air_quality = get_air_quality(zip_code, airnow_token)
     healthcare_access = get_specialist_access(zip_code)
     disease_prevalence = get_disease_prevalence(zip_code)
 
-    race_ethnicity_score = normalize(
-        census_data["african_american_pct"] + census_data["hispanic_pct"] + census_data["asian_pct"],
-        0, 100
-    )
+    ethnicity_raw = calculate_ethnicity_score(census_data)
+    ethnicity_raw_scores.append((zip_code, ethnicity_raw))
+
+# Normalize ethnicity scores
+if ethnicity_raw_scores:
+    min_eth = min(score for _, score in ethnicity_raw_scores)
+    max_eth = max(score for _, score in ethnicity_raw_scores)
+
+for zip_code, ethnicity_raw in ethnicity_raw_scores:
+    census_data = get_census_data(zip_code, census_token)
+    air_quality = get_air_quality(zip_code, airnow_token)
+    healthcare_access = get_specialist_access(zip_code)
+    disease_prevalence = get_disease_prevalence(zip_code)
+
+    race_ethnicity_score = normalize(ethnicity_raw, min_eth, max_eth)
     socioeconomic_score = normalize(census_data["poverty_rate"], 0, 50)
     urban_density_score = normalize(census_data["urban_density"], 0, 100)
 
